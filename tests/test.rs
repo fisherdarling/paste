@@ -171,3 +171,19 @@ mod test_none_delimited_single_ident {
         assert_eq!(f(), "i32x4");
     }
 }
+
+
+macro_rules! func {
+    ($name:ident) => {
+        paste::item! {
+            fn [<$name:lower _world>]() {}
+        }
+    };
+}
+
+func!(hello);
+
+#[test]
+fn hello() {
+    hello_world();
+}

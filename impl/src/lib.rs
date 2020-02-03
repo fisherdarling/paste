@@ -11,6 +11,7 @@ use syn::{parenthesized, parse_macro_input, Lit, LitStr, Token};
 
 #[proc_macro]
 pub fn item(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    println!("PROC MACRO: {}", input);
     let input = parse_macro_input!(input as PasteInput);
     proc_macro::TokenStream::from(input.expanded)
 }
@@ -40,14 +41,17 @@ struct PasteInput {
 
 impl Parse for PasteInput {
     fn parse(input: ParseStream) -> Result<Self> {
+        println!("Parse: {}", input);
         let mut expanded = TokenStream::new();
         while !input.is_empty() {
+            println!("$$$ Loop Paste: {}", input);
             match input.parse()? {
                 TokenTree::Group(group) => {
                     let delimiter = group.delimiter();
                     let content = group.stream();
                     let span = group.span();
                     if delimiter == Delimiter::Bracket && is_paste_operation(&content) {
+                        println!("~~~ parse input ~~~");
                         let segments = parse_bracket_as_segments.parse2(content)?;
                         let pasted = paste_segments(span, &segments)?;
                         pasted.to_tokens(&mut expanded);
@@ -69,6 +73,7 @@ impl Parse for PasteInput {
 
 fn is_paste_operation(input: &TokenStream) -> bool {
     let input = input.clone();
+    println!("~~~ Is paste operation ~~~");
     parse_bracket_as_segments.parse2(input).is_ok()
 }
 
@@ -84,12 +89,14 @@ fn is_single_ident(input: &TokenStream) -> bool {
 }
 
 enum Segment {
+    Lower(String),
     String(String),
     Apostrophe(Span),
     Env(LitStr),
 }
 
 fn parse_bracket_as_segments(input: ParseStream) -> Result<Vec<Segment>> {
+    println!("=== Parse Bracket: {}", input);
     input.parse::<Token![<]>()?;
 
     let segments = parse_segments(input)?;
@@ -102,10 +109,13 @@ fn parse_bracket_as_segments(input: ParseStream) -> Result<Vec<Segment>> {
 }
 
 fn parse_segments(input: ParseStream) -> Result<Vec<Segment>> {
+    println!("||| Parse Segments: {}", input);
     let mut segments = Vec::new();
     while !(input.is_empty() || input.peek(Token![>])) {
+        print!("*** Loop: {} ", input);
         match input.parse()? {
             TokenTree::Ident(ident) => {
+                println!("ident");
                 let mut fragment = ident.to_string();
                 if fragment.starts_with("r#") {
                     fragment = fragment.split_off(2);
@@ -121,6 +131,7 @@ fn parse_segments(input: ParseStream) -> Result<Vec<Segment>> {
                 }
             }
             TokenTree::Literal(lit) => {
+                println!("lit");
                 let value = match syn::parse_str(&lit.to_string())? {
                     Lit::Str(string) => string.value().replace('-', "_"),
                     Lit::Int(_) => lit.to_string(),
@@ -128,14 +139,33 @@ fn parse_segments(input: ParseStream) -> Result<Vec<Segment>> {
                 };
                 segments.push(Segment::String(value));
             }
-            TokenTree::Punct(punct) => match punct.as_char() {
-                '_' => segments.push(Segment::String("_".to_string())),
-                '\'' => segments.push(Segment::Apostrophe(punct.span())),
-                _ => return Err(Error::new(punct.span(), "unexpected punct")),
-            },
+            TokenTree::Punct(punct) => {
+                println!("punct");
+                match punct.as_char() {
+                    '_' => segments.push(Segment::String("_".to_string())),
+                    '\'' => segments.push(Segment::Apostrophe(punct.span())),
+                    _ => return Err(Error::new(punct.span(), "unexpected punct")),
+                }
+            }
             TokenTree::Group(group) => {
+                println!("group");
                 if group.delimiter() == Delimiter::None {
-                    let nested = parse_segments.parse2(group.stream())?;
+                    let mut nested = parse_segments.parse2(group.stream())?;
+                    println!("After inner: `{}`", input);
+
+                    if nested.len() == 1 && input.peek(Token![:]) && !input.peek2(Token![:]) {
+                        let _ = input.parse::<Token![:]>()?;
+                        let modifier = input.parse::<Ident>()?;
+
+                        println!("Modifier: {}", modifier.to_string());
+
+                        if modifier.to_string() == "lower" {
+                            if let Segment::String(v) = &nested[0] {
+                                nested[0] = Segment::Lower(v.clone());
+                            }
+                        }
+                    }
+
                     segments.extend(nested);
                 } else {
                     return Err(Error::new(group.span(), "unexpected token"));
@@ -147,6 +177,7 @@ fn parse_segments(input: ParseStream) -> Result<Vec<Segment>> {
 }
 
 fn paste_segments(span: Span, segments: &[Segment]) -> Result<TokenStream> {
+    println!("+++ Paste Segments");
     let mut pasted = String::new();
     let mut is_lifetime = false;
 
@@ -154,6 +185,9 @@ fn paste_segments(span: Span, segments: &[Segment]) -> Result<TokenStream> {
         match segment {
             Segment::String(segment) => {
                 pasted.push_str(&segment);
+            }
+            Segment::Lower(segment) => {
+                pasted.push_str(&segment.to_lowercase());
             }
             Segment::Apostrophe(span) => {
                 if is_lifetime {
